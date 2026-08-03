@@ -11,7 +11,6 @@ fn main() -> Result<()> {
         eprintln!("Usage: {} <rootfs-dir> <command> [args...]", args[0]);
         exit(1);
     }
-    exit(1);
 
     let rootfs = args[1].clone();
     let command = args[2..].to_vec();

@@ -20,12 +20,12 @@ pub fn pull_image(distro: &str) -> Result<()> {
 
 
     let target_dir = "./images/alpine";
-    fs::create_dir_all(&target_dir).context("Failed to create image directory")?;
-    let file = fs::File::open("./downloads/alpine-minirootfs-3.24.1-x86_64.tar.gz").context("Failed to open download")?;
     if Path::new(&target_dir).exists() {
         println!("Image already unpacked");
         return Ok(());
     }
+    fs::create_dir_all(&target_dir).context("Failed to create image directory")?;
+    let file = fs::File::open("./downloads/alpine-minirootfs-3.24.1-x86_64.tar.gz").context("Failed to open download")?;
     let tar = GzDecoder::new(file);
     let mut archive = Archive::new(tar);
     archive.unpack(&target_dir).context("Failed to unpack tar.gz")?;

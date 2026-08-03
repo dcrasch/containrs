@@ -10,32 +10,6 @@ use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, chdir, execvp, fork, pivot_root, sethostname};
 
-/// RAII guard: unmounts a path on drop, even during a panic/unwind.
-struct MountGuard {
-    target: String,
-    active: bool,
-}
-
-impl MountGuard {
-    fn new(target: &str) -> Self {
-        MountGuard {
-            target: target.to_string(),
-            active: true,
-        }
-    }
-    fn disarm(&mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for MountGuard {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = umount2(self.target.as_str(), MntFlags::MNT_DETACH);
-        }
-    }
-}
-
 fn setup_rootfs(rootfs: &str) -> Result<(), Box<dyn Error>> {
     // Make sure mount propagation events do not escape to the host.
     mount(
@@ -55,7 +29,6 @@ fn setup_rootfs(rootfs: &str) -> Result<(), Box<dyn Error>> {
         MsFlags::MS_BIND | MsFlags::MS_REC,
         None::<&str>,
     )?;
-    let mut root_guard = MountGuard::new(rootfs);
 
     let old_root = format!("{}/.old_root", rootfs);
     fs::create_dir_all(&old_root)?;
@@ -63,10 +36,6 @@ fn setup_rootfs(rootfs: &str) -> Result<(), Box<dyn Error>> {
     chdir(rootfs)?;
     pivot_root(".", ".old_root")?;
     chdir("/")?;
-
-    // From here on the guard target is meaningless (namespace already
-    // isolates us), so disarm it — cleanup will be automatic.
-    root_guard.disarm();
 
     fs::create_dir_all("/proc").ok();
     mount(
