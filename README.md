@@ -16,6 +16,13 @@ Mostly educational.
 
 * <https://github.com/nix-rust/nix>
 
+## Documentation
+
+* <https://www.man7.org/linux/man-pages/man1/unshare.1.html>
+* <https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html>
+* <https://lwn.net/Articles/949960/>
+* <https://docs.cilium.io/en/stable/> <https://ebpf.io/>
+
 ## Copyright
 
 Copyright (c) David Rasch 2026,  licensed MIT or GPL

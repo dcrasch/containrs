@@ -11,3 +11,5 @@ wget https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-miniroot
 mkdir alpine
 tar xvf alpine-minirootfs-3.24.1-x86_64.tar.gz -C alpine
 ```
+
+## Pivot root
