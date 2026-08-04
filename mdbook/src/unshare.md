@@ -1,10 +1,15 @@
 # Unshare
 
 Moves the calling process to a new namespace.
-* ipc namespaces
+
 * mount namespaces
 * uts namespace
+* ipc namespaces
+* TODO network namespace
 * pid_namespaces
+* TODO user namespace
+* TODO cgroup namespace
+* NOT USED time namespace
 
 ## CLONE_NEWNS
 
