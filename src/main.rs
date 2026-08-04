@@ -13,6 +13,20 @@ fn main() -> Result<()> {
     }
 
     let rootfs = args[1].clone();
+
+    let command = vec![
+        "/bin/busybox".to_string(),
+        "readlink".to_string(),
+        "/proc/self".to_string(),
+    ];
+    match container::run(&rootfs, &command) {
+        Ok(code) => {} // exit(code),
+        Err(e) => {
+            eprintln!("container error: {}", e);
+            exit(1);
+        }
+    };
+
     let command = args[2..].to_vec();
 
     match container::run(&rootfs, &command) {

@@ -31,10 +31,6 @@ Requires  CAP_SYS_ADMIN capability.
 Unshare the PID namespace. The first child created by the calling process will assume the role of init process ID 1.
 Requires  CAP_SYS_ADMIN capability.
  
-## CLONE_THREAD (implied)
-
-The child is placed in the same thread group as the calling process.
-
 ## CLONE_NEWIPC
 
 The calling process has a private copy of the IPC.  Isolates the System V IPC, Posix message queues.
