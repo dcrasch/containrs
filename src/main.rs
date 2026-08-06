@@ -4,16 +4,8 @@ use std::process::exit;
 
 mod container;
 mod image;
-fn main() -> Result<()> {
-    image::pull_image("alpine")?;
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <rootfs-dir> <command> [args...]", args[0]);
-        exit(1);
-    }
 
-    let rootfs = args[1].clone();
-
+fn pidone(rootfs: String) {
     let command = vec![
         "/bin/busybox".to_string(),
         "readlink".to_string(),
@@ -26,7 +18,17 @@ fn main() -> Result<()> {
             exit(1);
         }
     };
+}
 
+fn main() -> Result<()> {
+    image::pull_image("alpine")?;
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: {} <rootfs-dir> <command> [args...]", args[0]);
+        exit(1);
+    }
+
+    let rootfs = args[1].clone();
     let command = args[2..].to_vec();
 
     match container::run(&rootfs, &command) {
