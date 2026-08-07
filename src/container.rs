@@ -1,92 +1,22 @@
 use std::error::Error;
 use std::ffi::CString;
-use std::fs;
 use std::process::exit;
 
-use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, clone};
 use nix::sys::prctl;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{chdir, execvp, getpid, pivot_root, sethostname};
+use nix::unistd::{execvp, getpid, sethostname};
+
+use crate::mounts::{ChangeKind, OverlayPaths, changed_files, setup_rootfs};
 
 const STACK_SIZE: usize = 1024 * 1024;
 
-fn setup_rootfs(rootfs: &str) -> Result<(), Box<dyn Error>> {
-    // Make sure mount propagation events do not escape to the host.
-    mount(
-        None::<&str>,
-        "/",
-        None::<&str>,
-        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-        None::<&str>,
-    );
-
-    // Bind-mount rootfs onto itself so it becomes a valid mount point
-    // for pivot_root.
-    mount(
-        Some(rootfs),
-        rootfs,
-        None::<&str>,
-        MsFlags::MS_BIND | MsFlags::MS_REC,
-        None::<&str>,
-    )?;
-
-    // Unique scratch dir name per-run (keyed on our own pid, which is
-    // unique within the new PID namespace *and* distinct across runs
-    // since each run gets a brand new namespace/process). Avoids
-    // collisions with leftovers from a previous failed run.
-    let old_root = format!("{}/.old_root.{}", rootfs, getpid());
-    fs::create_dir_all(&old_root)?;
-
-    chdir(rootfs)?;
-    let old_root_rel = old_root
-        .strip_prefix(&format!("{}/", rootfs))
-        .unwrap_or(".old_root");
-    pivot_root(".", old_root_rel)?;
-    chdir("/")?;
-
-    let old_root_abs = format!("/{}", old_root_rel);
-
-    fs::create_dir_all("/proc").ok();
-    mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::empty(),
-        None::<&str>,
-    )?;
-
-    fs::create_dir_all("/sys").ok();
-    let _ = mount(
-        Some("sysfs"),
-        "/sys",
-        Some("sysfs"),
-        MsFlags::empty(),
-        None::<&str>,
-    );
-
-    fs::create_dir_all("/dev").ok();
-    let _ = mount(
-        Some("tmpfs"),
-        "/dev",
-        Some("tmpfs"),
-        MsFlags::empty(),
-        None::<&str>,
-    );
-
-    // Detach the old root — this is what actually "restores" the host
-    // view for this process tree; nothing leaks outside the namespace.
-    umount2(old_root_abs.as_str(), MntFlags::MNT_DETACH)?;
-    fs::remove_dir(&old_root_abs).ok();
-    Ok(())
-}
-
-fn child_main(rootfs: &str, command: &[String]) -> Result<(), Box<dyn Error>> {
+fn child_main(paths: &OverlayPaths, command: &[String]) -> Result<(), Box<dyn Error>> {
     // If the parent dies unexpectedly, kill this child too.
     prctl::set_pdeathsig(Signal::SIGKILL)?;
     sethostname("container")?;
-    setup_rootfs(rootfs)?;
+    setup_rootfs(paths)?;
 
     let cmd = CString::new(command[0].as_str())?;
     let cargs: Vec<CString> = command
@@ -100,26 +30,37 @@ fn child_main(rootfs: &str, command: &[String]) -> Result<(), Box<dyn Error>> {
     unreachable!("execvp only returns on error");
 }
 
-/// Runs `command` inside a fresh set of namespaces rooted at `rootfs`.
-/// Safe to call this repeatedly (sequentially) within the same
-/// program — every invocation allocates its own stack, spawns its own
-/// child, and gets entirely fresh namespaces with no shared state
-/// carried over from a previous call.
-pub fn run(rootfs: &str, command: &[String]) -> Result<i32, Box<dyn Error>> {
+/// Runs `command` inside a fresh set of namespaces, with the rootfs
+/// built as an overlayfs on top of `base_layer` (read-only). All
+/// writes the container makes are captured in a per-run change layer
+/// under `state_dir`, which is what we diff once the container exits.
+///
+/// Safe to call repeatedly (sequentially): every invocation gets its
+/// own stack, its own child, fresh namespaces, and its own change
+/// layer under `state_dir`.
+pub fn run(base_layer: &str, state_dir: &str, command: &[String]) -> Result<i32, Box<dyn Error>> {
     let flags = CloneFlags::CLONE_NEWNS
         | CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWIPC;
 
+    // Unique per-run state dir so concurrent/previous runs never
+    // collide, keyed on our own pid at call time.
+    let run_dir = format!("{}/run-{}", state_dir, getpid());
+    let paths = OverlayPaths::new(base_layer, &run_dir);
+
     // Fresh stack per call — never shared/reused across invocations.
     let mut stack = vec![0u8; STACK_SIZE];
 
-    let rootfs_owned = rootfs.to_string();
     let command_owned = command.to_vec();
+    let paths_for_child = OverlayPaths::new(paths.lower.clone(), &run_dir);
 
     let child_fn = Box::new(move || -> isize {
-        println!("rootfs: {rootfs_owned:#?}, cmd: {command_owned:#?}");
-        if let Err(e) = child_main(&rootfs_owned, &command_owned) {
+        println!(
+            "base layer: {:?}, change layer: {:?}, cmd: {:?}",
+            paths_for_child.lower, paths_for_child.upper, command_owned
+        );
+        if let Err(e) = child_main(&paths_for_child, &command_owned) {
             eprintln!("container setup failed: {}", e);
             exit(127);
         }
@@ -131,12 +72,37 @@ pub fn run(rootfs: &str, command: &[String]) -> Result<i32, Box<dyn Error>> {
     // and no other clone()d child is concurrently using it.
     let child = unsafe { clone(child_fn, &mut stack, flags, Some(Signal::SIGCHLD as i32))? };
 
-    match waitpid(child, None)? {
-        WaitStatus::Exited(_, code) => Ok(code),
+    let exit_code = match waitpid(child, None)? {
+        WaitStatus::Exited(_, code) => code,
         WaitStatus::Signaled(_, sig, _) => {
             eprintln!("container process killed by signal {:?}", sig);
-            Ok(128)
+            128
         }
-        _ => Ok(1),
+        _ => 1,
+    };
+
+    // The change layer lives on the host filesystem outside the
+    // container's mount namespace, so it's still readable here now
+    // that the child has exited.
+    report_changes(&paths.upper)?;
+
+    Ok(exit_code)
+}
+
+fn report_changes(upper: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    let changes = changed_files(upper)?;
+    if changes.is_empty() {
+        println!("no files changed");
+        return Ok(());
     }
+
+    println!("files changed ({}):", changes.len());
+    for change in changes {
+        let marker = match change.kind {
+            ChangeKind::AddedOrModified => "+",
+            ChangeKind::Removed => "-",
+        };
+        println!("  {} {}", marker, change.path.display());
+    }
+    Ok(())
 }

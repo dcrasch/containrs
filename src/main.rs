@@ -4,6 +4,7 @@ use std::process::exit;
 
 mod container;
 mod image;
+mod mounts;
 
 fn pidone(rootfs: String) {
     let command = vec![
@@ -11,7 +12,7 @@ fn pidone(rootfs: String) {
         "readlink".to_string(),
         "/proc/self".to_string(),
     ];
-    match container::run(&rootfs, &command) {
+    match container::run(&rootfs, "/tmp/workdir", &command) {
         Ok(code) => {} // exit(code),
         Err(e) => {
             eprintln!("container error: {}", e);
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
     let rootfs = args[1].clone();
     let command = args[2..].to_vec();
 
-    match container::run(&rootfs, &command) {
+    match container::run(&rootfs, "/tmp/workdir", &command) {
         Ok(code) => exit(code),
         Err(e) => {
             eprintln!("container error: {}", e);
